@@ -12,13 +12,25 @@ check-fmt:
     test -z "$(gofmt -l .)"
 
 # go vet plus golangci-lint's default linters.
-lint:
+lint: compile
     go vet ./...
     golangci-lint run ./...
 
-# Unit tests against a fake Scooter server, with the race detector.
-test-unit:
+# Go unit tests against a fake Scooter server, with the race detector.
+test-go:
     go test -race ./...
+
+# Byte-compile the Elisp, warnings as errors.
+compile:
+    emacs -Q --batch -L lisp --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile lisp/*.el
+    rm -f lisp/*.elc
+
+# ERT tests against a fake server.
+ert:
+    emacs -Q --batch -L lisp -L test -l test/scooter-test.el -f ert-run-tests-batch-and-exit
+
+# All unit tests, Go and Elisp.
+test-unit: test-go ert
 
 # Fast checks, as CI runs them.
 ci: check-flake check-fmt lint test-unit

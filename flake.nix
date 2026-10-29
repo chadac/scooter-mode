@@ -26,7 +26,13 @@
         checks.scooter = self'.packages.scooter;
 
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.emacs-nox pkgs.go pkgs.golangci-lint pkgs.just ];
+          packages = [
+            (pkgs.emacs-nox.pkgs.withPackages (e: [ e.magit-section e.transient e.agent-shell ]))
+            pkgs.go
+            pkgs.golangci-lint
+            pkgs.just
+            pkgs.curl
+          ];
         };
       };
     };

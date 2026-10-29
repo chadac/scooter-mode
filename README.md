@@ -7,6 +7,37 @@ oauth2-proxy.
 
 Work in progress.
 
+## Emacs
+
+Needs Emacs 29.1+, `magit-section`, `transient`, `agent-shell` and `curl`, plus
+the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`).
+
+```elisp
+(add-to-list 'load-path "~/src/scooter-mode/lisp")
+(require 'scooter)
+(require 'scooter-project)          ; C-x p p and Projectile hooks
+(server-start)                      ; lets the bridge refresh logins
+(keymap-global-set "C-c s" scooter-command-map)
+
+(setq scooter-servers
+      '((home :url "https://scooter.example.org" :auth cookie)
+        (work :url "https://scooter.corp.example"
+              :auth (oidc :issuer "https://oauth.id.jumpcloud.com/"
+                          :client-id "scooter-emacs"))))
+```
+
+- `C-c s l` lists conversations on every server, grouped by status. `RET`
+  opens one in agent-shell; `c` new, `s` star, `t` retitle, `k` stop the run,
+  `z` suspend, `f` files viewer, `b` browser, `g` refresh, `?` menu.
+- `C-c s c`, `C-c s r`, `C-c s p` start a conversation from a prompt, the
+  region, or the current project; `C-c s R` sends the region to an existing
+  one.
+- Auth: `cookie` asks for the `_oauth2_proxy` cookie (or reads it from
+  auth-source, host = the server, user = `_oauth2_proxy`). `oidc` logs in
+  through the browser with PKCE; oauth2-proxy must run with
+  `--skip-jwt-bearer-tokens` and accept the client as an extra JWT issuer.
+  GitHub issues no ID tokens, so GitHub-backed servers use `cookie`.
+
 ## `scooter acp`
 
 `scooter acp --server https://scooter.example.org` is an
