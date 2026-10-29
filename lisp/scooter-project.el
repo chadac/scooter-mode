@@ -22,10 +22,12 @@
 
 (with-eval-after-load 'projectile
   (keymap-set projectile-command-map "S" #'scooter-new-from-project)
-  (eval '(def-projectile-commander-method ?S
-           "Start a Scooter conversation about the project."
-           (call-interactively #'scooter-new-from-project))
-        t))
+  ;; Newer Projectile dropped the commander.
+  (when (fboundp 'def-projectile-commander-method)
+    (eval '(def-projectile-commander-method ?S
+             "Start a Scooter conversation about the project."
+             (call-interactively #'scooter-new-from-project))
+          t)))
 
 (provide 'scooter-project)
 ;;; scooter-project.el ends here

@@ -229,5 +229,16 @@
                  (should (member '(scooter-list-mode emacs) calls)))
         (setq features (delq 'evil features))))))
 
+(defvar projectile-command-map)
+
+(ert-deftest scooter-test-project-without-projectile-commander ()
+  ;; Projectile 2026+ has a command map but no commander.
+  (let ((projectile-command-map (make-sparse-keymap)))
+    (require 'scooter-project)
+    (provide 'projectile)
+    (unwind-protect
+        (should (eq (keymap-lookup projectile-command-map "S") #'scooter-new-from-project))
+      (setq features (delq 'projectile features)))))
+
 (provide 'scooter-test)
 ;;; scooter-test.el ends here
