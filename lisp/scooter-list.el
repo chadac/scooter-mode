@@ -144,7 +144,10 @@
   (let ((buf (get-buffer-create (if server (format "*scooter: %s*" server) "*scooter*"))))
     (with-current-buffer buf
       (unless (derived-mode-p 'scooter-list-mode) (scooter-list-mode))
-      (setq scooter-list--servers (if server (list server) (scooter-server-names)))
+      ;; Self-access cannot list conversations.
+      (setq scooter-list--servers (if server (list server)
+                                    (seq-remove (lambda (s) (scooter-server-get s :self))
+                                                (scooter-server-names))))
       (scooter-list-refresh)
       (scooter-list--start-streams))
     (pop-to-buffer-same-window buf)))

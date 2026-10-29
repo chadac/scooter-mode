@@ -55,11 +55,13 @@ If the command isn't on PATH, `scooter-install-binary' may download it."
 (cl-defun scooter-acp-arguments (server &key project)
   "Return the bridge arguments for SERVER.
 PROJECT non-nil puts the working directory's git checkout in the first prompt."
-  (append (cdr scooter-acp-command)
-          (list "--server" (scooter-server-url server))
-          (when-let* ((model (scooter-server-get server :model))) (list "--model" model))
-          (and project '("--project"))
-          (scooter-agent-shell--headers-args server)))
+  (if (scooter-server-get server :self)
+      (append (cdr scooter-acp-command) '("--self") (and project '("--project")))
+    (append (cdr scooter-acp-command)
+            (list "--server" (scooter-server-url server))
+            (when-let* ((model (scooter-server-get server :model))) (list "--model" model))
+            (and project '("--project"))
+            (scooter-agent-shell--headers-args server))))
 
 (cl-defun scooter-agent-shell-config (server &key title project)
   "Return an agent-shell config for SERVER.

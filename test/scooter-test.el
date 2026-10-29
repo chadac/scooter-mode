@@ -59,6 +59,11 @@
       (should (equal (scooter-acp-arguments 'home :project t)
                      '("acp" "--server" "https://s.example" "--model" "m1" "--project" "--headers-file" "f"))))))
 
+(ert-deftest scooter-test-acp-arguments-self ()
+  (let ((scooter-servers '((sandbox :self t)))
+        (scooter-acp-command '("scooter" "acp")))
+    (should (equal (scooter-acp-arguments 'sandbox) '("acp" "--self")))))
+
 (defconst scooter-test--dir (file-name-directory (or load-file-name buffer-file-name))
   "This file's directory, captured at load time.")
 
