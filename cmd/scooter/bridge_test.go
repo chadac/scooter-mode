@@ -57,7 +57,7 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 	writeJSON := func(status int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(v)
+		_ = json.NewEncoder(w).Encode(v)
 	}
 	switch {
 	case r.URL.Path == "/whoami":
@@ -99,13 +99,17 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	case len(parts) >= 3 && parts[2] == "messages":
 		var body struct{ Text string }
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			f.t.Errorf("decode: %v", err)
+		}
 		writeJSON(202, map[string]any{"ok": true})
 		f.messages <- body.Text
 		go f.onMessage(f, body.Text)
 	case len(parts) >= 4 && parts[2] == "permission":
 		var body struct{ OptionID string }
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			f.t.Errorf("decode: %v", err)
+		}
 		w.WriteHeader(204)
 		f.permissions <- body.OptionID
 	case len(parts) >= 3 && parts[2] == "cancel":
@@ -129,25 +133,29 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 	t.Cleanup(cancel)
 	toAgentR, toAgentW := io.Pipe()
 	toClientR, toClientW := io.Pipe()
-	t.Cleanup(func() { toAgentW.Close(); toClientW.Close() })
+	t.Cleanup(func() { _ = toAgentW.Close(); _ = toClientW.Close() })
 
 	agentRPC := newRPC(toClientW)
 	a := newAgent(ctx, newClient(server, headerSource{}), agentRPC, opts)
-	go agentRPC.serve(ctx, toAgentR, a.handle, a.notify)
+	go func() { _ = agentRPC.serve(ctx, toAgentR, a.handle, a.notify) }()
 
 	tc := &testClient{rpc: newRPC(toAgentW), choose: "allow"}
-	go tc.rpc.serve(ctx, toClientR, func(_ context.Context, method string, _ json.RawMessage) (any, func(), error) {
-		if method != "session/request_permission" {
-			return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
-		}
-		return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
-	}, func(method string, params json.RawMessage) {
-		var p struct{ Update map[string]any }
-		json.Unmarshal(params, &p)
-		tc.mu.Lock()
-		tc.updates = append(tc.updates, p.Update)
-		tc.mu.Unlock()
-	})
+	go func() {
+		_ = tc.rpc.serve(ctx, toClientR, func(_ context.Context, method string, _ json.RawMessage) (any, func(), error) {
+			if method != "session/request_permission" {
+				return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
+			}
+			return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
+		}, func(method string, params json.RawMessage) {
+			var p struct{ Update map[string]any }
+			if err := json.Unmarshal(params, &p); err != nil {
+				t.Errorf("update: %v", err)
+			}
+			tc.mu.Lock()
+			tc.updates = append(tc.updates, p.Update)
+			tc.mu.Unlock()
+		})
+	}()
 	return tc
 }
 
@@ -347,7 +355,9 @@ func TestAuthWallReloadsHeadersOnce(t *testing.T) {
 	}
 
 	file := filepath.Join(dir, "h.json")
-	os.WriteFile(file, []byte(`{"X-Token":"bad"}`), 0o600)
+	if err := os.WriteFile(file, []byte(`{"X-Token":"bad"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	c = newClient(srv.URL, headerSource{file: file})
 	if err := c.call(context.Background(), "GET", "/whoami", nil, nil); !errors.Is(err, errAuthWall) {
 		t.Fatalf("err = %v, want errAuthWall", err)

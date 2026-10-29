@@ -111,7 +111,10 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 	switch sig {
 	case sigQueue:
 		var items []json.RawMessage
-		json.Unmarshal(ev.Items, &items)
+		if err := json.Unmarshal(ev.Items, &items); err != nil {
+			log.Printf("session %s: queue: %v", s.id, err)
+			break
+		}
 		s.queueEmpty = len(items) == 0
 	case sigResolved:
 		delete(s.pending, ev.ToolCallID)

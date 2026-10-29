@@ -10,4 +10,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       - run: nix flake check -L
-      - run: nix develop -c sh -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...'
+      - run: nix develop -c just ci

@@ -25,7 +25,7 @@
       checks = forAll (pkgs: { scooter = self.packages.${pkgs.system}.scooter; });
 
       devShells = forAll (pkgs: {
-        default = pkgs.mkShell { packages = [ pkgs.emacs-nox pkgs.go pkgs.just ]; };
+        default = pkgs.mkShell { packages = [ pkgs.emacs-nox pkgs.go pkgs.golangci-lint pkgs.just ]; };
       });
     };
 }

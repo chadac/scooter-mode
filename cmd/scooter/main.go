@@ -27,7 +27,7 @@ func main() {
 	project := fs.Bool("project", false, "put the working directory's git remote and branch in the first prompt")
 	headersCmd := fs.String("headers-command", "", "shell command printing the auth headers as a JSON object; {retry} becomes t after an auth wall")
 	headersFile := fs.String("headers-file", "", "file holding the auth headers as a JSON object")
-	fs.Parse(os.Args[2:])
+	_ = fs.Parse(os.Args[2:]) // ExitOnError: it exits rather than returning one.
 	if *server == "" {
 		log.Fatal("--server is required")
 	}

@@ -61,7 +61,9 @@ func (p *rpc) write(m rpcMsg) {
 	}
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
-	p.w.Write(append(b, '\n'))
+	if _, err := p.w.Write(append(b, '\n')); err != nil {
+		log.Printf("rpc: write: %v", err)
+	}
 }
 
 func (p *rpc) notify(method string, params any) {
