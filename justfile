@@ -29,9 +29,10 @@ compile:
 deps:
     ok=0; for f in lisp/*.el; do emacs -Q --batch -L lisp -l test/check-deps.el "$f" || ok=1; done; exit $ok
 
-# ERT tests against a fake server.
+# ERT tests via Cask, against the latest MELPA dependencies.
 ert:
-    emacs -Q --batch -L lisp -L test -l test/scooter-test.el -f ert-run-tests-batch-and-exit
+    cask install
+    cask exec ert-runner
 
 # All unit tests, Go and Elisp.
 test-unit: test-go deps ert

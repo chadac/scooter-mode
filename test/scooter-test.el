@@ -59,12 +59,14 @@
       (should (equal (scooter-acp-arguments 'home :project t)
                      '("acp" "--server" "https://s.example" "--model" "m1" "--project" "--headers-file" "f"))))))
 
+(defconst scooter-test--dir (file-name-directory (or load-file-name buffer-file-name))
+  "This file's directory, captured at load time.")
+
 (defmacro scooter-test-with-fake-server (url-var &rest body)
   "Run BODY with URL-VAR bound to a fake Scooter's base URL."
   (declare (indent 1))
   `(let* ((proc (start-process "fake-scooter" (generate-new-buffer " *fake*") "emacs" "-Q" "--batch" "-l"
-                               (expand-file-name "fake-server.el" (file-name-directory (or load-file-name buffer-file-name
-                                                                                           (locate-library "scooter-test"))))))
+                               (expand-file-name "fake-server.el" scooter-test--dir)))
           (port nil))
      (unwind-protect
          (progn
@@ -219,26 +221,37 @@
     (scooter-list-mode)
     (should (eq (key-binding "?") #'scooter-list-dispatch))))
 
-(ert-deftest scooter-test-list-starts-in-emacs-state-under-evil ()
-  (let ((calls nil))
-    (cl-letf (((symbol-function 'evil-set-initial-state) (lambda (&rest args) (push args calls))))
-      ;; Replay the file's eval-after-load forms, as loading evil would.
-      (provide 'evil)
-      (unwind-protect
-          (progn (load "scooter-list" nil t)
-                 (should (member '(scooter-list-mode emacs) calls)))
-        (setq features (delq 'evil features))))))
+(defun scooter-test--fresh-emacs (&rest forms)
+  "Run FORMS in a fresh Emacs with this `load-path'; return (EXIT . OUTPUT)."
+  (with-temp-buffer
+    (let ((rc (call-process (expand-file-name invocation-name invocation-directory)
+                            nil t nil "-Q" "--batch" "--eval"
+                            (prin1-to-string `(progn (setq load-path ',load-path) ,@forms)))))
+      (cons rc (buffer-string)))))
 
-(defvar projectile-command-map)
+(defmacro scooter-test--skip-unless-installed (feature)
+  "Skip unless FEATURE is installed; Cask installs it from MELPA."
+  `(skip-unless (locate-library ,(symbol-name feature))))
 
-(ert-deftest scooter-test-project-without-projectile-commander ()
-  ;; Projectile 2026+ has a command map but no commander.
-  (let ((projectile-command-map (make-sparse-keymap)))
-    (require 'scooter-project)
-    (provide 'projectile)
-    (unwind-protect
-        (should (eq (keymap-lookup projectile-command-map "S") #'scooter-new-from-project))
-      (setq features (delq 'projectile features)))))
+(ert-deftest scooter-test-projectile-binds-s ()
+  ;; Real MELPA Projectile, loaded before and after scooter-project.
+  (scooter-test--skip-unless-installed projectile)
+  (dolist (order '((projectile scooter-project) (scooter-project projectile)))
+    (let ((res (scooter-test--fresh-emacs
+                `(mapc #'require ',order)
+                '(princ (keymap-lookup projectile-command-map "S")))))
+      (should (equal res '(0 . "scooter-new-from-project"))))))
+
+(ert-deftest scooter-test-list-under-real-evil ()
+  ;; Real MELPA evil: the list opens in Emacs state so its keys work.
+  (scooter-test--skip-unless-installed evil)
+  (scooter-test-with-fake-server url
+    (let ((res (scooter-test--fresh-emacs
+                '(require 'evil) '(evil-mode 1) '(require 'scooter-list)
+                `(setq scooter-servers '((home :url ,url)))
+                '(scooter-list 'home)
+                '(princ (list evil-state (key-binding "?") (key-binding "g"))))))
+      (should (equal res '(0 . "(emacs scooter-list-dispatch scooter-list-refresh)"))))))
 
 (provide 'scooter-test)
 ;;; scooter-test.el ends here
