@@ -25,7 +25,7 @@ func main() {
 	conversation := fs.String("conversation", "", "attach the first new session to this conversation id")
 	model := fs.String("model", "", "model for new conversations (default: the server's)")
 	project := fs.Bool("project", false, "put the working directory's git remote and branch in the first prompt")
-	headersCmd := fs.String("headers-command", "", "shell command printing the auth headers as a JSON object")
+	headersCmd := fs.String("headers-command", "", "shell command printing the auth headers as a JSON object; {retry} becomes t after an auth wall")
 	headersFile := fs.String("headers-file", "", "file holding the auth headers as a JSON object")
 	fs.Parse(os.Args[2:])
 	if *server == "" {

@@ -24,12 +24,13 @@ type headerSource struct {
 	file    string
 }
 
-func (h headerSource) load(ctx context.Context) (map[string]string, error) {
+func (h headerSource) load(ctx context.Context, retry bool) (map[string]string, error) {
 	var out []byte
 	var err error
 	switch {
 	case h.command != "":
-		cmd := exec.CommandContext(ctx, "sh", "-c", h.command)
+		// {retry} lets the command drop a token the proxy just refused.
+		cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(h.command, "{retry}", lispBool(retry)))
 		cmd.Stderr = os.Stderr
 		out, err = cmd.Output()
 	case h.file != "":
@@ -56,6 +57,13 @@ func (h headerSource) load(ctx context.Context) (map[string]string, error) {
 		return nil, fmt.Errorf("auth headers: want a JSON object of headers: %w", err)
 	}
 	return m, nil
+}
+
+func lispBool(b bool) string {
+	if b {
+		return "t"
+	}
+	return "nil"
 }
 
 // client calls one Scooter server's HTTP API.
@@ -85,7 +93,7 @@ func (c *client) currentHeaders(ctx context.Context, reload bool) (map[string]st
 	if c.loaded && !reload {
 		return c.headers, nil
 	}
-	h, err := c.source.load(ctx)
+	h, err := c.source.load(ctx, reload)
 	if err != nil {
 		return nil, err
 	}

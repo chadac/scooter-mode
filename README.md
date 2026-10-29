@@ -15,7 +15,8 @@ creates a Scooter conversation; `--conversation <id>` attaches the first one to
 an existing conversation instead. Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
-is rerun once when the server's auth proxy rejects a request.
+is rerun once when the server's auth proxy rejects a request, with `{retry}`
+in it replaced by `t` (otherwise `nil`).
 
 ```sh
 nix run github:chadac/scooter-mode -- acp --server https://scooter.example.org \

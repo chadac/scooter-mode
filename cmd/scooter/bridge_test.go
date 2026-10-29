@@ -354,9 +354,19 @@ func TestAuthWallReloadsHeadersOnce(t *testing.T) {
 	}
 }
 
+func TestRetryPlaceholder(t *testing.T) {
+	src := headerSource{command: `echo '{"X-Retry":"{retry}"}'`}
+	for _, retry := range []bool{false, true} {
+		h, err := src.load(context.Background(), retry)
+		if err != nil || h["X-Retry"] != lispBool(retry) {
+			t.Fatalf("retry=%v: %v, %v", retry, h, err)
+		}
+	}
+}
+
 func TestHeadersFromEmacsclient(t *testing.T) {
 	// emacsclient --eval prints the JSON as a quoted Lisp string.
-	h, err := headerSource{command: `printf '%s' '"{\"Cookie\":\"_oauth2_proxy=abc\"}"'`}.load(context.Background())
+	h, err := headerSource{command: `printf '%s' '"{\"Cookie\":\"_oauth2_proxy=abc\"}"'`}.load(context.Background(), false)
 	if err != nil || h["Cookie"] != "_oauth2_proxy=abc" {
 		t.Fatalf("headers = %v, %v", h, err)
 	}
