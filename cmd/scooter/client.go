@@ -95,11 +95,15 @@ func (c *client) currentHeaders(ctx context.Context, reload bool) (map[string]st
 
 // isAuthWall reports an auth-proxy response rather than Scooter.s.
 func isAuthWall(resp *http.Response) bool {
+	jsonBody := strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json")
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized:
 		return true
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return true
+	case resp.StatusCode == http.StatusForbidden:
+		// Scooter's own 403s are JSON; the proxy's are not.
+		return !jsonBody
 	}
 	return strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html")
 }

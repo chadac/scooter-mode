@@ -361,3 +361,16 @@ func TestHeadersFromEmacsclient(t *testing.T) {
 		t.Fatalf("headers = %v, %v", h, err)
 	}
 }
+
+func TestScooterForbiddenIsNotAnAuthWall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"not your conversation"}`))
+	}))
+	defer srv.Close()
+	err := newClient(srv.URL, headerSource{}).call(context.Background(), "POST", "/conversations/x/cancel", nil, nil)
+	if err == nil || errors.Is(err, errAuthWall) || !strings.Contains(err.Error(), "not your conversation") {
+		t.Fatalf("err = %v", err)
+	}
+}
