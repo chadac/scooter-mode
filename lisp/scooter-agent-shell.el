@@ -15,6 +15,7 @@
 (require 'server)
 (require 'scooter-server)
 (require 'scooter-auth)
+(require 'scooter-install)
 
 (declare-function agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell-start "agent-shell")
@@ -22,7 +23,8 @@
 (defvar agent-shell-agent-configs)
 
 (defcustom scooter-acp-command '("scooter" "acp")
-  "Command and leading arguments that run the ACP bridge."
+  "Command and leading arguments that run the ACP bridge.
+If the command isn't on PATH, `scooter-install-binary' may download it."
   :type '(repeat string)
   :group 'scooter)
 
@@ -73,7 +75,7 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
      :client-maker
      (lambda (buffer)
        (agent-shell--make-acp-client
-        :command (car scooter-acp-command)
+        :command (scooter-install-program (car scooter-acp-command))
         :command-params (scooter-acp-arguments server :project project)
         :context-buffer buffer))
      :install-instructions "Install the bridge: nix profile install github:chadac/scooter-mode")))

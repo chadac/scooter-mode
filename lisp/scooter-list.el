@@ -15,13 +15,35 @@
 (require 'magit-section)
 (require 'scooter-server)
 (require 'scooter-http)
+(require 'transient)
 
 (declare-function scooter-open "scooter" (server id))
 (declare-function scooter-new "scooter" (server text &optional model))
 (declare-function scooter-dispatch "scooter")
+(declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defface scooter-list-status '((t :inherit magit-section-heading))
-  "Face for status group headings."
+  "Face for status group headings without a face of their own."
+  :group 'scooter)
+
+(defface scooter-list-awaiting '((t :inherit (warning bold)))
+  "Face for the \"Awaiting you\" heading."
+  :group 'scooter)
+
+(defface scooter-list-running '((t :inherit (success bold)))
+  "Face for the \"Running\" heading."
+  :group 'scooter)
+
+(defface scooter-list-failed '((t :inherit (error bold)))
+  "Face for the \"Failed\" heading."
+  :group 'scooter)
+
+(defface scooter-list-star '((t :inherit font-lock-constant-face))
+  "Face for the star on starred conversations."
+  :group 'scooter)
+
+(defface scooter-list-model '((t :inherit font-lock-type-face))
+  "Face for the model column."
   :group 'scooter)
 
 (defface scooter-list-dim '((t :inherit shadow))
@@ -29,9 +51,12 @@
   :group 'scooter)
 
 (defconst scooter-list--groups
-  '((awaiting . "Awaiting you") (running . "Running") (idle . "Idle")
-    (suspended . "Suspended") (failed . "Failed"))
-  "Status groups, in display order.")
+  '((awaiting "Awaiting you" scooter-list-awaiting)
+    (running "Running" scooter-list-running)
+    (idle "Idle" scooter-list-status)
+    (suspended "Suspended" scooter-list-dim)
+    (failed "Failed" scooter-list-failed))
+  "Status groups in display order, with their labels and heading faces.")
 
 (defvar-local scooter-list--servers nil
   "Servers this buffer shows.")
@@ -84,12 +109,33 @@
   "w" #'scooter-list-copy-url
   "b" #'scooter-list-browse
   "g" #'scooter-list-refresh
-  "?" #'scooter-dispatch)
+  "?" #'scooter-list-dispatch)
 
 (define-derived-mode scooter-list-mode magit-section-mode "Scooter"
   "Scooter conversations, grouped by server and status."
   (setq-local revert-buffer-function (lambda (&rest _) (scooter-list-refresh)))
   (add-hook 'kill-buffer-hook #'scooter-list--stop-streams nil t))
+
+;; Evil's normal state would shadow every key here, `?' included.
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'scooter-list-mode 'emacs))
+
+(transient-define-prefix scooter-list-dispatch ()
+  "Commands for the conversation list."
+  [["Conversation at point"
+    ("RET" "Open" scooter-list-open)
+    ("s" "Star" scooter-list-star)
+    ("t" "Retitle" scooter-list-retitle)
+    ("k" "Stop run" scooter-list-cancel)
+    ("z" "Suspend" scooter-list-suspend)]
+   ["Links"
+    ("f" "Files" scooter-list-files)
+    ("b" "Browse" scooter-list-browse)
+    ("w" "Copy URL" scooter-list-copy-url)]
+   ["List"
+    ("c" "New" scooter-list-new)
+    ("g" "Refresh" scooter-list-refresh)
+    ("S" "More Scooter commands" scooter-dispatch)]])
 
 ;;;###autoload
 (defun scooter-list (&optional server)
@@ -114,13 +160,12 @@
 (defun scooter-list--insert-conversation (server conv)
   "Insert one row for CONV on SERVER."
   (magit-insert-section (scooter-conversation-section (cons server conv))
-    (insert (if (eq (alist-get 'starred conv) t) "★ " "  ")
-            (propertize (scooter-slug (alist-get 'title conv) (alist-get 'id conv))
-                        'face 'magit-section-secondary-heading)
-            "  "
-            (propertize (format "%s %s" (or (alist-get 'model conv) "")
-                                (scooter-list--age (alist-get 'lastActivityAt conv)))
+    (insert (if (eq (alist-get 'starred conv) t) (propertize "★ " 'face 'scooter-list-star) "  ")
+            (string-pad (scooter-slug (alist-get 'title conv) (alist-get 'id conv)) 41)
+            (propertize (string-pad (scooter-list--age (alist-get 'lastActivityAt conv)) 4 nil t)
                         'face 'scooter-list-dim)
+            (when-let* ((model (alist-get 'model conv)))
+              (concat "  " (propertize model 'face 'scooter-list-model)))
             "\n")))
 
 (defun scooter-list--render (data)
@@ -136,11 +181,11 @@
             (propertize (format "  %s" (scooter-server-url server)) 'face 'scooter-list-dim))
           (if (stringp convs)
               (insert "  " (propertize convs 'face 'error) "\n")
-            (pcase-dolist (`(,group . ,label) scooter-list--groups)
+            (pcase-dolist (`(,group ,label ,face) scooter-list--groups)
               (when-let* ((members (seq-filter (lambda (c) (eq (scooter-list-group c) group)) convs)))
                 (magit-insert-section (scooter-group-section group (memq group '(suspended failed)))
                   (magit-insert-heading
-                    (propertize (format "%s (%d)" label (length members)) 'face 'scooter-list-status))
+                    (propertize (format "%s (%d)" label (length members)) 'face face))
                   (dolist (c members) (scooter-list--insert-conversation server c))))))
           (insert "\n"))))
     (goto-char (min pos (point-max)))))
