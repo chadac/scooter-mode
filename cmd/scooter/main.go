@@ -1,6 +1,7 @@
 // Command scooter connects local tools to a Scooter server.
 //
 //	scooter acp --server URL [flags]   ACP agent on stdio (agent-shell)
+//	scooter version                    print the release version
 package main
 
 import (
@@ -13,9 +14,16 @@ import (
 	"syscall"
 )
 
+// version is set at release build time with -ldflags -X.
+var version = "dev"
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("scooter: ")
+	if len(os.Args) == 2 && os.Args[1] == "version" {
+		fmt.Println(version)
+		return
+	}
 	if len(os.Args) < 2 || os.Args[1] != "acp" {
 		fmt.Fprintln(os.Stderr, "usage: scooter acp --server URL [--conversation ID] [--model M] [--project] [--headers-command CMD | --headers-file PATH]")
 		os.Exit(2)

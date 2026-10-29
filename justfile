@@ -23,3 +23,16 @@ test-unit:
 # Fast checks, as CI runs them.
 ci: check-flake check-fmt lint test-unit
     @echo "✅ ci passed"
+
+# Static release binaries in dist/, one per OS/arch, plus SHA256SUMS.
+dist version="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf dist && mkdir dist
+    for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+      os=${target%/*} arch=${target#*/}
+      CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+        -ldflags "-s -w -X main.version={{version}}" \
+        -o "dist/scooter-$os-$arch" ./cmd/scooter
+    done
+    (cd dist && sha256sum scooter-* > SHA256SUMS)

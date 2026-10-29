@@ -18,6 +18,10 @@ an existing conversation instead. Auth headers come from
 is rerun once when the server's auth proxy rejects a request, with `{retry}`
 in it replaced by `t` (otherwise `nil`).
 
+Prebuilt static binaries for Linux and macOS (amd64, arm64) are attached to
+each [GitHub release](https://github.com/chadac/scooter-mode/releases), with
+`SHA256SUMS`; `scooter version` prints the release. Or run it with Nix:
+
 ```sh
 nix run github:chadac/scooter-mode -- acp --server https://scooter.example.org \
   --headers-command 'pass show scooter/headers'
