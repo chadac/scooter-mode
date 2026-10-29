@@ -1,0 +1,363 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeScooter serves the slice of Scooter's API the bridge uses.
+type fakeScooter struct {
+	t           *testing.T
+	mu          sync.Mutex
+	events      []json.RawMessage
+	sums        []string
+	subs        []chan frame
+	onMessage   func(f *fakeScooter, text string)
+	permissions chan string
+	cancels     chan struct{}
+	messages    chan string
+}
+
+func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
+	f := &fakeScooter{t: t, permissions: make(chan string, 4), cancels: make(chan struct{}, 4), messages: make(chan string, 4)}
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func (f *fakeScooter) emit(ev map[string]any) {
+	b, _ := json.Marshal(ev)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prev := strings.Repeat("0", 64)
+	if n := len(f.sums); n > 0 {
+		prev = f.sums[n-1]
+	}
+	sum := fmt.Sprintf("sum-%d", len(f.sums)+1)
+	f.events = append(f.events, b)
+	f.sums = append(f.sums, sum)
+	for _, ch := range f.subs {
+		ch <- frame{Kind: "event", Event: b, Checksum: sum, PrevChecksum: prev}
+	}
+}
+
+func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	writeJSON := func(status int, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(v)
+	}
+	switch {
+	case r.URL.Path == "/whoami":
+		writeJSON(200, map[string]any{"id": "me"})
+	case r.Method == "POST" && r.URL.Path == "/conversations":
+		writeJSON(201, map[string]any{"id": "c1"})
+	case len(parts) == 2 && parts[0] == "conversations":
+		writeJSON(200, map[string]any{"id": parts[1]})
+	case len(parts) >= 3 && parts[2] == "history":
+		f.mu.Lock()
+		sum := strings.Repeat("0", 64)
+		if n := len(f.sums); n > 0 {
+			sum = f.sums[n-1]
+		}
+		evs := append([]json.RawMessage{}, f.events...)
+		f.mu.Unlock()
+		writeJSON(200, map[string]any{"events": evs, "checksum": sum})
+	case len(parts) >= 3 && parts[2] == "events.integrity":
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		ch := make(chan frame, 64)
+		f.mu.Lock()
+		for _, e := range f.events {
+			b, _ := json.Marshal(frame{Kind: "event", Event: e})
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+		f.subs = append(f.subs, ch)
+		f.mu.Unlock()
+		w.(http.Flusher).Flush()
+		for {
+			select {
+			case fr := <-ch:
+				b, _ := json.Marshal(fr)
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
+	case len(parts) >= 3 && parts[2] == "messages":
+		var body struct{ Text string }
+		json.NewDecoder(r.Body).Decode(&body)
+		writeJSON(202, map[string]any{"ok": true})
+		f.messages <- body.Text
+		go f.onMessage(f, body.Text)
+	case len(parts) >= 4 && parts[2] == "permission":
+		var body struct{ OptionID string }
+		json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(204)
+		f.permissions <- body.OptionID
+	case len(parts) >= 3 && parts[2] == "cancel":
+		writeJSON(202, map[string]any{"ok": true})
+		f.cancels <- struct{}{}
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// testClient is an ACP client wired to an in-process agent.
+type testClient struct {
+	rpc     *rpc
+	mu      sync.Mutex
+	updates []map[string]any
+	choose  string
+}
+
+func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	toAgentR, toAgentW := io.Pipe()
+	toClientR, toClientW := io.Pipe()
+	t.Cleanup(func() { toAgentW.Close(); toClientW.Close() })
+
+	agentRPC := newRPC(toClientW)
+	a := newAgent(ctx, newClient(server, headerSource{}), agentRPC, opts)
+	go agentRPC.serve(ctx, toAgentR, a.handle, a.notify)
+
+	tc := &testClient{rpc: newRPC(toAgentW), choose: "allow"}
+	go tc.rpc.serve(ctx, toClientR, func(_ context.Context, method string, _ json.RawMessage) (any, func(), error) {
+		if method != "session/request_permission" {
+			return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
+		}
+		return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
+	}, func(method string, params json.RawMessage) {
+		var p struct{ Update map[string]any }
+		json.Unmarshal(params, &p)
+		tc.mu.Lock()
+		tc.updates = append(tc.updates, p.Update)
+		tc.mu.Unlock()
+	})
+	return tc
+}
+
+func (tc *testClient) call(t *testing.T, method string, params, out any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := tc.rpc.request(ctx, method, params, out); err != nil {
+		t.Fatalf("%s: %v", method, err)
+	}
+}
+
+// text joins the text chunks of one update kind.
+func (tc *testClient) text(kind string) string {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	var b strings.Builder
+	for _, u := range tc.updates {
+		if u["sessionUpdate"] == kind {
+			b.WriteString(u["content"].(map[string]any)["text"].(string))
+		}
+	}
+	return b.String()
+}
+
+func (tc *testClient) find(kind string) map[string]any {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	for _, u := range tc.updates {
+		if u["sessionUpdate"] == kind {
+			return u
+		}
+	}
+	return nil
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatal("timed out")
+}
+
+func run(f *fakeScooter, text string, middle ...map[string]any) {
+	f.emit(map[string]any{"type": "TEXT_MESSAGE_START", "messageId": "u1", "role": "user"})
+	f.emit(map[string]any{"type": "TEXT_MESSAGE_CONTENT", "messageId": "u1", "delta": text})
+	f.emit(map[string]any{"type": "TEXT_MESSAGE_END", "messageId": "u1"})
+	f.emit(map[string]any{"type": "RUN_STARTED", "threadId": "c1", "runId": "r1"})
+	for _, ev := range middle {
+		f.emit(ev)
+	}
+	f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c1", "runId": "r1"})
+}
+
+func TestPromptStreamsTextAndTools(t *testing.T) {
+	f, srv := newFake(t)
+	f.onMessage = func(f *fakeScooter, text string) {
+		run(f, text,
+			map[string]any{"type": "TEXT_MESSAGE_START", "messageId": "a1", "role": "assistant"},
+			map[string]any{"type": "TEXT_MESSAGE_CONTENT", "messageId": "a1", "delta": "hi "},
+			map[string]any{"type": "TEXT_MESSAGE_CONTENT", "messageId": "a1", "delta": "there"},
+			map[string]any{"type": "TEXT_MESSAGE_END", "messageId": "a1"},
+			map[string]any{"type": "TOOL_CALL_START", "toolCallId": "t1", "toolCallName": "bash"},
+			map[string]any{"type": "TOOL_CALL_ARGS", "toolCallId": "t1", "delta": `{"command":"ls"}`},
+			map[string]any{"type": "TOOL_CALL_END", "toolCallId": "t1"},
+			map[string]any{"type": "TOOL_CALL_RESULT", "toolCallId": "t1", "messageId": "m", "content": "README.md"},
+		)
+	}
+	tc := startBridge(t, srv.URL, agentOptions{})
+	tc.call(t, "initialize", map[string]any{"protocolVersion": 1}, nil)
+	var ns struct{ SessionID string }
+	tc.call(t, "session/new", map[string]any{"cwd": "/tmp", "mcpServers": []any{}}, &ns)
+	if ns.SessionID != "c1" {
+		t.Fatalf("sessionId = %q", ns.SessionID)
+	}
+	time.Sleep(100 * time.Millisecond) // let the follower connect
+	var res struct{ StopReason string }
+	tc.call(t, "session/prompt", map[string]any{"sessionId": "c1", "prompt": []any{map[string]any{"type": "text", "text": "hello"}}}, &res)
+
+	if res.StopReason != "end_turn" {
+		t.Errorf("stopReason = %q", res.StopReason)
+	}
+	waitFor(t, func() bool { return tc.text("agent_message_chunk") == "hi there" })
+	if got := tc.text("user_message_chunk"); got != "" {
+		t.Errorf("echoed the client's own prompt: %q", got)
+	}
+	call := tc.find("tool_call")
+	if call == nil || call["kind"] != "execute" || call["title"] != "bash" {
+		t.Errorf("tool_call = %v", call)
+	}
+	waitFor(t, func() bool {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		for _, u := range tc.updates {
+			if u["sessionUpdate"] == "tool_call_update" && u["status"] == "completed" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestPermissionRoundTrip(t *testing.T) {
+	f, srv := newFake(t)
+	f.onMessage = func(f *fakeScooter, text string) {
+		f.emit(map[string]any{"type": "RUN_STARTED", "threadId": "c1", "runId": "r1"})
+		f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c1", "runId": "r1", "outcome": map[string]any{
+			"type": "interrupt",
+			"interrupts": []any{map[string]any{
+				"id": "t9", "toolCallId": "t9", "message": "Run rm?", "reason": "confirmation",
+				"metadata": map[string]any{"options": []any{
+					map[string]any{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+					map[string]any{"optionId": "deny", "name": "Deny", "kind": "reject_once"},
+				}},
+			}},
+		}})
+		got := <-f.permissions
+		f.emit(map[string]any{"type": "PERMISSION_RESOLVED", "toolCallId": "t9", "optionId": got})
+		f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c1", "runId": "r1"})
+	}
+	tc := startBridge(t, srv.URL, agentOptions{})
+	tc.choose = "allow"
+	var ns struct{ SessionID string }
+	tc.call(t, "session/new", map[string]any{"cwd": "/tmp"}, &ns)
+	time.Sleep(100 * time.Millisecond)
+	var res struct{ StopReason string }
+	tc.call(t, "session/prompt", map[string]any{"sessionId": ns.SessionID, "prompt": []any{map[string]any{"type": "text", "text": "clean up"}}}, &res)
+	if res.StopReason != "end_turn" {
+		t.Errorf("stopReason = %q", res.StopReason)
+	}
+}
+
+func TestCancelBeforeRunStarts(t *testing.T) {
+	f, srv := newFake(t)
+	f.onMessage = func(*fakeScooter, string) {}
+	tc := startBridge(t, srv.URL, agentOptions{})
+	var ns struct{ SessionID string }
+	tc.call(t, "session/new", map[string]any{"cwd": "/tmp"}, &ns)
+	go func() {
+		<-f.messages
+		tc.rpc.notify("session/cancel", map[string]any{"sessionId": ns.SessionID})
+	}()
+	var res struct{ StopReason string }
+	tc.call(t, "session/prompt", map[string]any{"sessionId": ns.SessionID, "prompt": []any{map[string]any{"type": "text", "text": "x"}}}, &res)
+	if res.StopReason != "cancelled" {
+		t.Errorf("stopReason = %q", res.StopReason)
+	}
+	select {
+	case <-f.cancels:
+	case <-time.After(5 * time.Second):
+		t.Error("cancel never reached the server")
+	}
+}
+
+func TestAttachReplaysHistory(t *testing.T) {
+	f, srv := newFake(t)
+	run(f, "earlier question",
+		map[string]any{"type": "TEXT_MESSAGE_START", "messageId": "a0", "role": "assistant"},
+		map[string]any{"type": "TEXT_MESSAGE_CONTENT", "messageId": "a0", "delta": "earlier answer"},
+		map[string]any{"type": "TEXT_MESSAGE_END", "messageId": "a0"},
+	)
+	tc := startBridge(t, srv.URL, agentOptions{conversation: "c7"})
+	var ns struct{ SessionID string }
+	tc.call(t, "session/new", map[string]any{"cwd": "/tmp"}, &ns)
+	if ns.SessionID != "c7" {
+		t.Fatalf("sessionId = %q", ns.SessionID)
+	}
+	waitFor(t, func() bool { return tc.text("agent_message_chunk") == "earlier answer" })
+	if got := tc.text("user_message_chunk"); got != "earlier question" {
+		t.Errorf("user replay = %q", got)
+	}
+	// Events after attach arrive live, once.
+	f.emit(map[string]any{"type": "TEXT_MESSAGE_START", "messageId": "a1", "role": "assistant"})
+	f.emit(map[string]any{"type": "TEXT_MESSAGE_CONTENT", "messageId": "a1", "delta": " and more"})
+	waitFor(t, func() bool { return tc.text("agent_message_chunk") == "earlier answer and more" })
+}
+
+func TestAuthWallReloadsHeadersOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Token") != "good" {
+			http.Redirect(w, r, "/oauth2/start", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"me"}`))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "n")
+	cmd := fmt.Sprintf(`n=$(cat %[1]s 2>/dev/null || echo 0); echo $((n+1)) > %[1]s; if [ "$n" -ge 1 ]; then echo '{"X-Token":"good"}'; else echo '{"X-Token":"stale"}'; fi`, counter)
+	c := newClient(srv.URL, headerSource{command: cmd})
+	if err := c.call(context.Background(), "GET", "/whoami", nil, nil); err != nil {
+		t.Fatalf("after refresh: %v", err)
+	}
+
+	file := filepath.Join(dir, "h.json")
+	os.WriteFile(file, []byte(`{"X-Token":"bad"}`), 0o600)
+	c = newClient(srv.URL, headerSource{file: file})
+	if err := c.call(context.Background(), "GET", "/whoami", nil, nil); !errors.Is(err, errAuthWall) {
+		t.Fatalf("err = %v, want errAuthWall", err)
+	}
+}
+
+func TestHeadersFromEmacsclient(t *testing.T) {
+	// emacsclient --eval prints the JSON as a quoted Lisp string.
+	h, err := headerSource{command: `printf '%s' '"{\"Cookie\":\"_oauth2_proxy=abc\"}"'`}.load(context.Background())
+	if err != nil || h["Cookie"] != "_oauth2_proxy=abc" {
+		t.Fatalf("headers = %v, %v", h, err)
+	}
+}

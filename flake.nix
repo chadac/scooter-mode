@@ -9,6 +9,21 @@
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
     in
     {
+      packages = forAll (pkgs: rec {
+        # The local helper: `scooter acp` (an ACP agent for agent-shell).
+        scooter = pkgs.buildGoModule {
+          pname = "scooter";
+          version = "0.1.0";
+          src = ./.;
+          subPackages = [ "cmd/scooter" ];
+          vendorHash = null;
+          meta.mainProgram = "scooter";
+        };
+        default = scooter;
+      });
+
+      checks = forAll (pkgs: { scooter = self.packages.${pkgs.system}.scooter; });
+
       devShells = forAll (pkgs: {
         default = pkgs.mkShell { packages = [ pkgs.emacs-nox pkgs.go pkgs.just ]; };
       });
