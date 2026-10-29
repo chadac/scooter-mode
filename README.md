@@ -9,7 +9,7 @@ Work in progress.
 
 ## Emacs
 
-Needs Emacs 29.1+, `magit-section`, `transient`, `agent-shell` and `curl`, plus
+Needs Emacs 29.1+, `magit-section`, `transient`, `agent-shell` and `curl` 7.76+ (shell-maker checks it), plus
 the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`).
 
 ```elisp
