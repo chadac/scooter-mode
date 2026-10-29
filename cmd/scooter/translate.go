@@ -1,0 +1,176 @@
+package main
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+// aguiEvent holds the AG-UI fields the bridge reads.
+type aguiEvent struct {
+	Type         string          `json:"type"`
+	MessageID    string          `json:"messageId"`
+	Role         string          `json:"role"`
+	Delta        string          `json:"delta"`
+	ToolCallID   string          `json:"toolCallId"`
+	ToolCallName string          `json:"toolCallName"`
+	Content      string          `json:"content"`
+	Message      string          `json:"message"`
+	Source       string          `json:"source"`
+	Text         string          `json:"text"`
+	Cancelled    bool            `json:"cancelled"`
+	Outcome      *runOutcome     `json:"outcome"`
+	Items        json.RawMessage `json:"items"`
+}
+
+type runOutcome struct {
+	Type       string      `json:"type"`
+	Interrupts []interrupt `json:"interrupts"`
+}
+
+type interrupt struct {
+	ID         string `json:"id"`
+	Message    string `json:"message"`
+	ToolCallID string `json:"toolCallId"`
+	Metadata   struct {
+		Options []permissionOption `json:"options"`
+	} `json:"metadata"`
+}
+
+// permissionOption is shared verbatim by Scooter and ACP.
+type permissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+}
+
+// update is one ACP session/update payload.
+type update map[string]any
+
+func textChunk(kind, text string) update {
+	return update{"sessionUpdate": kind, "content": map[string]any{"type": "text", "text": text}}
+}
+
+// turnSignal is how an event affects the turn in flight.
+type turnSignal int
+
+const (
+	sigNone turnSignal = iota
+	sigRunStarted
+	sigRunEnded
+	sigRunError
+	sigInterrupt
+	sigQueue
+	sigResolved
+)
+
+// translator folds AG-UI events into ACP updates, tracking per-message state.
+type translator struct {
+	roles    map[string]string
+	toolArgs map[string]*strings.Builder
+	// Off during our prompt: the client already shows its text.
+	echoUser bool
+}
+
+func newTranslator() *translator {
+	return &translator{roles: map[string]string{}, toolArgs: map[string]*strings.Builder{}, echoUser: true}
+}
+
+func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
+	switch ev.Type {
+	case "RUN_STARTED":
+		return nil, sigRunStarted
+	case "RUN_FINISHED":
+		if ev.Outcome != nil && ev.Outcome.Type == "interrupt" {
+			return nil, sigInterrupt
+		}
+		return nil, sigRunEnded
+	case "RUN_ERROR":
+		return []update{textChunk("agent_message_chunk", "\n\n**Run failed:** "+ev.Message+"\n")}, sigRunError
+	case "QUEUE_UPDATED":
+		return nil, sigQueue
+	case "PERMISSION_RESOLVED":
+		return nil, sigResolved
+	case "TEXT_MESSAGE_START":
+		t.roles[ev.MessageID] = ev.Role
+	case "TEXT_MESSAGE_CONTENT":
+		if t.roles[ev.MessageID] == "user" {
+			if !t.echoUser {
+				return nil, sigNone
+			}
+			return []update{textChunk("user_message_chunk", ev.Delta)}, sigNone
+		}
+		return []update{textChunk("agent_message_chunk", ev.Delta)}, sigNone
+	case "TEXT_MESSAGE_END":
+		delete(t.roles, ev.MessageID)
+	case "REASONING_MESSAGE_CONTENT":
+		return []update{textChunk("agent_thought_chunk", ev.Delta)}, sigNone
+	case "SYSTEM_MESSAGE":
+		return []update{textChunk("user_message_chunk", "["+ev.Source+"] "+ev.Text)}, sigNone
+	case "TOOL_CALL_START":
+		t.toolArgs[ev.ToolCallID] = &strings.Builder{}
+		return []update{{
+			"sessionUpdate": "tool_call",
+			"toolCallId":    ev.ToolCallID,
+			"title":         ev.ToolCallName,
+			"kind":          toolKind(ev.ToolCallName),
+			"status":        "pending",
+		}}, sigNone
+	case "TOOL_CALL_ARGS":
+		if b := t.toolArgs[ev.ToolCallID]; b != nil {
+			b.WriteString(ev.Delta)
+		}
+	case "TOOL_CALL_END":
+		u := update{"sessionUpdate": "tool_call_update", "toolCallId": ev.ToolCallID, "status": "in_progress"}
+		if b := t.toolArgs[ev.ToolCallID]; b != nil {
+			var input any
+			if json.Unmarshal([]byte(b.String()), &input) == nil {
+				u["rawInput"] = input
+			}
+			delete(t.toolArgs, ev.ToolCallID)
+		}
+		return []update{u}, sigNone
+	case "TOOL_CALL_RESULT":
+		return []update{{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    ev.ToolCallID,
+			"status":        "completed",
+			"content": []any{map[string]any{
+				"type":    "content",
+				"content": map[string]any{"type": "text", "text": ev.Content},
+			}},
+		}}, sigNone
+	}
+	return nil, sigNone
+}
+
+// toolKind guesses ACP.s tool kind from the tool name.
+func toolKind(name string) string {
+	n := strings.ToLower(name)
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(n, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("read", "view", "cat"):
+		return "read"
+	case has("edit", "write", "patch", "replace"):
+		return "edit"
+	case has("delete", "remove"):
+		return "delete"
+	case has("move", "rename"):
+		return "move"
+	case has("grep", "glob", "search", "find"):
+		return "search"
+	case has("bash", "shell", "exec", "run", "command"):
+		return "execute"
+	case has("fetch", "http", "web"):
+		return "fetch"
+	case has("think"):
+		return "think"
+	}
+	return "other"
+}
