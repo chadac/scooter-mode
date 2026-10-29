@@ -14,7 +14,7 @@
 (require 'json)
 (require 'scooter-server)
 
-(declare-function scooter-auth-headers "scooter-auth" (server &optional retry))
+(autoload 'scooter-auth-headers "scooter-auth")
 
 (defcustom scooter-curl-program "curl"
   "The curl executable."

@@ -164,8 +164,9 @@
             (string-pad (scooter-slug (alist-get 'title conv) (alist-get 'id conv)) 41)
             (propertize (string-pad (scooter-list--age (alist-get 'lastActivityAt conv)) 4 nil t)
                         'face 'scooter-list-dim)
-            (when-let* ((model (alist-get 'model conv)))
-              (concat "  " (propertize model 'face 'scooter-list-model)))
+            (if-let* ((model (alist-get 'model conv)))
+                (concat "  " (propertize model 'face 'scooter-list-model))
+              "")
             "\n")))
 
 (defun scooter-list--render (data)

@@ -153,5 +153,81 @@
     (should (equal (scooter-install-program "sh") (executable-find "sh")))
     (should-error (scooter-install-program "no-such-scooter-binary") :type 'user-error)))
 
+(defun scooter-test--lisp-dir ()
+  "The package's lisp/ directory."
+  (file-name-directory (locate-library "scooter")))
+
+(ert-deftest scooter-test-list-from-autoloads-in-fresh-emacs ()
+  ;; One process with everything loaded hides missing requires; start cold.
+  (scooter-test-with-fake-server url
+    (let* ((dir (make-temp-file "scooter-autoloads" t))
+           (defs (expand-file-name "scooter-autoloads.el" dir))
+           (form `(progn
+                    (setq load-path ',load-path)
+                    (load ,defs nil t)
+                    (setq scooter-servers '((home :url ,url)))
+                    (scooter-list 'home)
+                    (princ (with-current-buffer "*scooter: home*" (buffer-string))))))
+      (loaddefs-generate (scooter-test--lisp-dir) defs)
+      (with-temp-buffer
+        (let ((rc (call-process "emacs" nil t nil "-Q" "--batch" "--eval" (prin1-to-string form))))
+          (should (= rc 0))
+          (should (string-match-p "^Running (1)\n★ fix-login +[0-9]+d  m1$" (buffer-string)))
+          (should (string-match-p "^Suspended (1)$" (buffer-string)))
+          (should-not (string-match-p "void" (buffer-string))))))))
+
+(defmacro scooter-test-with-list (convs &rest body)
+  "Run BODY in a list buffer showing CONVS on server home."
+  (declare (indent 1))
+  `(let ((scooter-servers '((home :url "https://s.example"))))
+     (cl-letf (((symbol-function 'scooter-list--fetch) (lambda (_) ,convs))
+               ((symbol-function 'scooter-list--start-streams) #'ignore))
+       (save-window-excursion
+         (scooter-list 'home)
+         (unwind-protect (progn ,@body)
+           (kill-buffer "*scooter: home*"))))))
+
+(ert-deftest scooter-test-list-rows-align ()
+  (let ((now (* 1000 (float-time))))
+    (scooter-test-with-list
+        (list `((id . "a") (title . "Short") (starred . t) (runStartedAt . 1) (lastActivityAt . ,(- now 540000)))
+              `((id . "b") (title . "A much longer conversation title") (model . "m2") (runStartedAt . 1)
+                (lastActivityAt . ,(- now 7200000))))
+      (should (string-match-p "^★ short +9m$" (buffer-string)))
+      (let ((cols (mapcar (lambda (re) (goto-char (point-min)) (re-search-forward re) (current-column))
+                          '("9m" "2h"))))
+        (should (apply #'= cols))))))
+
+(ert-deftest scooter-test-list-faces ()
+  (scooter-test-with-list
+      (list '((id . "a") (title . "Wait") (awaitingInputAt . 1) (model . "m1"))
+            '((id . "b") (title . "Run") (runStartedAt . 1))
+            '((id . "c") (title . "Boom") (status . "failed") (starred . t)))
+    (cl-flet ((face-at (text) (goto-char (point-min)) (search-forward text)
+                (get-text-property (match-beginning 0) 'face)))
+      (should (eq (face-at "Awaiting you") 'scooter-list-awaiting))
+      (should (eq (face-at "Running") 'scooter-list-running))
+      (should (eq (face-at "Failed") 'scooter-list-failed))
+      (should (eq (face-at "m1") 'scooter-list-model)))))
+
+(ert-deftest scooter-test-list-shows-fetch-errors ()
+  (scooter-test-with-list "Scooter[home]: login required"
+    (should (string-match-p "^  Scooter\\[home\\]: login required$" (buffer-string)))))
+
+(ert-deftest scooter-test-list-help-key ()
+  (with-temp-buffer
+    (scooter-list-mode)
+    (should (eq (key-binding "?") #'scooter-list-dispatch))))
+
+(ert-deftest scooter-test-list-starts-in-emacs-state-under-evil ()
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'evil-set-initial-state) (lambda (&rest args) (push args calls))))
+      ;; Replay the file's eval-after-load forms, as loading evil would.
+      (provide 'evil)
+      (unwind-protect
+          (progn (load "scooter-list" nil t)
+                 (should (member '(scooter-list-mode emacs) calls)))
+        (setq features (delq 'evil features))))))
+
 (provide 'scooter-test)
 ;;; scooter-test.el ends here

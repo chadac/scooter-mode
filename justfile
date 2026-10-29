@@ -25,12 +25,16 @@ compile:
     emacs -Q --batch -L lisp --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile lisp/*.el
     rm -f lisp/*.elc
 
+# Each file loads (or autoloads) every function it calls.
+deps:
+    ok=0; for f in lisp/*.el; do emacs -Q --batch -L lisp -l test/check-deps.el "$f" || ok=1; done; exit $ok
+
 # ERT tests against a fake server.
 ert:
     emacs -Q --batch -L lisp -L test -l test/scooter-test.el -f ert-run-tests-batch-and-exit
 
 # All unit tests, Go and Elisp.
-test-unit: test-go ert
+test-unit: test-go deps ert
 
 # Fast checks, as CI runs them.
 ci: check-flake check-fmt lint test-unit
