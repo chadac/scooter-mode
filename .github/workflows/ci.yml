@@ -11,3 +11,10 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix flake check -L
       - run: nix develop -c just ci
+  melpa:
+    # Separate job so a MELPA outage doesn't block ci.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop -c just ert-melpa

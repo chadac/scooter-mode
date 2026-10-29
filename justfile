@@ -12,13 +12,34 @@ check-fmt:
     test -z "$(gofmt -l .)"
 
 # go vet plus golangci-lint's default linters.
-lint:
+lint: compile
     go vet ./...
     golangci-lint run ./...
 
-# Unit tests against a fake Scooter server, with the race detector.
-test-unit:
+# Go unit tests against a fake Scooter server, with the race detector.
+test-go:
     go test -race ./...
+
+# Byte-compile the Elisp, warnings as errors.
+compile:
+    emacs -Q --batch -L lisp --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile lisp/*.el
+    rm -f lisp/*.elc
+
+# Each file loads (or autoloads) every function it calls.
+deps:
+    ok=0; for f in lisp/*.el; do emacs -Q --batch -L lisp -l test/check-deps.el "$f" || ok=1; done; exit $ok
+
+# ERT tests with the dev shell's pinned nixpkgs dependencies.
+ert:
+    emacs -Q --batch -L lisp -L test -l test/scooter-test.el -f ert-run-tests-batch-and-exit
+
+# ERT tests via Cask against the latest MELPA dependencies (needs network).
+ert-melpa:
+    cask install
+    cask exec ert-runner
+
+# All unit tests, Go and Elisp.
+test-unit: test-go deps ert
 
 # Fast checks, as CI runs them.
 ci: check-flake check-fmt lint test-unit

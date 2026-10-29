@@ -26,7 +26,16 @@
         checks.scooter = self'.packages.scooter;
 
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.emacs-nox pkgs.go pkgs.golangci-lint pkgs.just ];
+          # Cask runs a bare Emacs so MELPA, not nixpkgs, supplies the deps.
+          CASK_EMACS = "${pkgs.emacs-nox}/bin/emacs";
+          packages = [
+            (pkgs.emacs-nox.pkgs.withPackages (e: [ e.magit-section e.transient e.agent-shell e.evil e.projectile ]))
+            pkgs.emacs-nox.pkgs.cask
+            pkgs.go
+            pkgs.golangci-lint
+            pkgs.just
+            pkgs.curl
+          ];
         };
       };
     };
