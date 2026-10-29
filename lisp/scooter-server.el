@@ -25,6 +25,8 @@ NAME is a symbol.  PLIST keys:
   :url    the server's base URL (required)
   :auth   nil, `cookie', or (oidc :issuer URL :client-id ID [:scopes LIST])
   :model  default model for new conversations
+  :self   non-nil inside a Scooter sandbox: chat with its own
+          conversation via the router's self-access (no :url)
 
 Example:
 

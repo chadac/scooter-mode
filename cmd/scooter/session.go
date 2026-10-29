@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +41,10 @@ type session struct {
 	pending    map[string]interrupt // unanswered permission requests, by tool call
 	asked      map[string]bool      // permission requests already sent to the client
 	prefix     string               // prepended to the first prompt
+
+	approveURL string      // where to answer permissions when noAnswer is set
+	noAnswer   bool        // the server refuses permission answers from us
+	following  atomic.Bool // one stream per conversation, however often it is opened
 }
 
 type history struct {
@@ -163,6 +168,14 @@ func (s *session) askLocked(ctx context.Context, in interrupt) {
 	if toolCallID == "" {
 		toolCallID = in.ID
 	}
+	if s.noAnswer {
+		note := "\n\n> Waiting for approval: " + in.Message + ". Answer it in the Scooter web UI"
+		if s.approveURL != "" {
+			note += ": " + s.approveURL
+		}
+		s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": textChunk("agent_message_chunk", note+".\n")})
+		return
+	}
 	go func() {
 		var res struct {
 			Outcome struct {
@@ -187,6 +200,12 @@ func (s *session) askLocked(ctx context.Context, in interrupt) {
 
 // follow tails the integrity stream, resyncing after gaps or drops.
 func (s *session) follow(ctx context.Context) {
+	if s.following.CompareAndSwap(false, true) {
+		s.tail(ctx)
+	}
+}
+
+func (s *session) tail(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		err := s.c.stream(ctx, s.path("/events.integrity"), func() {
@@ -218,6 +237,10 @@ func (s *session) resync(ctx context.Context) error {
 	defer s.mu.Unlock()
 	s.applyNew(ctx, h, true)
 	s.synced = false
+	// Requests that landed in the gap still need asking; asked dedups.
+	for _, in := range s.pending {
+		s.askLocked(ctx, in)
+	}
 	return nil
 }
 

@@ -16,6 +16,10 @@ type agentOptions struct {
 	conversation string // attach the first session/new to this id
 	model        string
 	project      bool // describe the cwd's git checkout in the first prompt
+	// self: the router's sandbox self-access, which reaches one conversation
+	// and may not answer permissions; approvals point at approveURL instead.
+	self       bool
+	approveURL string
 }
 
 // agent maps ACP sessions onto Scooter conversations.
@@ -46,7 +50,7 @@ func wrap(err error) error {
 func (a *agent) handle(ctx context.Context, method string, params json.RawMessage) (any, func(), error) {
 	switch method {
 	case "initialize":
-		if err := a.c.call(ctx, "GET", "/whoami", nil, nil); err != nil {
+		if err := a.probe(ctx); err != nil {
 			return nil, nil, wrap(err)
 		}
 		return map[string]any{
@@ -115,13 +119,16 @@ func (a *agent) notify(method string, params json.RawMessage) {
 
 func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error) {
 	a.mu.Lock()
-	attach := a.opts.conversation != "" && !a.attached
+	// Self-access cannot create conversations, so every session is this one.
+	attach := a.opts.self || (a.opts.conversation != "" && !a.attached)
 	a.attached = a.attached || attach
 	a.mu.Unlock()
 
 	if attach {
-		if err := a.c.call(ctx, "GET", "/conversations/"+url.PathEscape(a.opts.conversation), nil, nil); err != nil {
-			return nil, nil, wrap(err)
+		if !a.opts.self {
+			if err := a.c.call(ctx, "GET", "/conversations/"+url.PathEscape(a.opts.conversation), nil, nil); err != nil {
+				return nil, nil, wrap(err)
+			}
 		}
 		s := a.open(a.opts.conversation)
 		// Replay after responding, so the client knows the id.
@@ -152,6 +159,14 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 	return map[string]any{"sessionId": s.id}, nil, nil
 }
 
+// probe checks the server and credentials before any session.
+func (a *agent) probe(ctx context.Context) error {
+	if a.opts.self {
+		return a.c.call(ctx, "GET", "/conversations/"+url.PathEscape(a.opts.conversation)+"/history", nil, nil)
+	}
+	return a.c.call(ctx, "GET", "/whoami", nil, nil)
+}
+
 func (a *agent) open(id string) *session {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -159,6 +174,10 @@ func (a *agent) open(id string) *session {
 		return s
 	}
 	s := newSession(id, a.c, a.out)
+	if a.opts.self {
+		s.approveURL = a.opts.approveURL
+		s.noAnswer = true
+	}
 	a.sessions[id] = s
 	return s
 }

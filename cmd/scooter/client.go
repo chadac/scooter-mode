@@ -22,6 +22,7 @@ var errAuthWall = errors.New("login required")
 type headerSource struct {
 	command string
 	file    string
+	bearer  string // a token file, reread on reload since it may rotate
 }
 
 func (h headerSource) load(ctx context.Context, retry bool) (map[string]string, error) {
@@ -33,6 +34,12 @@ func (h headerSource) load(ctx context.Context, retry bool) (map[string]string, 
 		cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(h.command, "{retry}", lispBool(retry)))
 		cmd.Stderr = os.Stderr
 		out, err = cmd.Output()
+	case h.bearer != "":
+		tok, err := os.ReadFile(h.bearer)
+		if err != nil {
+			return nil, fmt.Errorf("auth token: %w", err)
+		}
+		return map[string]string{"Authorization": "Bearer " + strings.TrimSpace(string(tok))}, nil
 	case h.file != "":
 		out, err = os.ReadFile(h.file)
 	default:

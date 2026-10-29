@@ -18,12 +18,14 @@ import (
 
 // fakeScooter serves the slice of Scooter's API the bridge uses.
 type fakeScooter struct {
-	t           *testing.T
-	mu          sync.Mutex
-	events      []json.RawMessage
-	sums        []string
-	subs        []chan frame
-	onMessage   func(f *fakeScooter, text string)
+	t         *testing.T
+	mu        sync.Mutex
+	events    []json.RawMessage
+	sums      []string
+	subs      []chan frame
+	onMessage func(f *fakeScooter, text string)
+	// selfOnly serves just the router's sandbox self-access routes.
+	selfOnly    bool
 	permissions chan string
 	cancels     chan struct{}
 	messages    chan string
@@ -58,6 +60,10 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	if f.selfOnly && !selfRouteFor(r) {
+		http.Error(w, "not available to sandboxes", http.StatusNotFound)
+		return
 	}
 	switch {
 	case r.URL.Path == "/whoami":
@@ -283,7 +289,6 @@ func TestPermissionRoundTrip(t *testing.T) {
 	tc.choose = "allow"
 	var ns struct{ SessionID string }
 	tc.call(t, "session/new", map[string]any{"cwd": "/tmp"}, &ns)
-	time.Sleep(100 * time.Millisecond)
 	var res struct{ StopReason string }
 	tc.call(t, "session/prompt", map[string]any{"sessionId": ns.SessionID, "prompt": []any{map[string]any{"type": "text", "text": "clean up"}}}, &res)
 	if res.StopReason != "end_turn" {
@@ -392,5 +397,73 @@ func TestScooterForbiddenIsNotAnAuthWall(t *testing.T) {
 	err := newClient(srv.URL, headerSource{}).call(context.Background(), "POST", "/conversations/x/cancel", nil, nil)
 	if err == nil || errors.Is(err, errAuthWall) || !strings.Contains(err.Error(), "not your conversation") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// selfRouteFor mirrors conversation-router's selfRoutes.
+func selfRouteFor(r *http.Request) bool {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "conversations" {
+		return false
+	}
+	switch r.Method + " " + parts[2] {
+	case "GET events", "GET events.integrity", "GET history", "POST messages", "POST cancel":
+		return true
+	}
+	return false
+}
+
+func TestSelfAccessStaysOnOneConversation(t *testing.T) {
+	f, srv := newFake(t)
+	f.selfOnly = true
+	f.onMessage = func(f *fakeScooter, text string) {
+		f.emit(map[string]any{"type": "RUN_STARTED", "threadId": "c7", "runId": "r1"})
+		f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c7", "runId": "r1", "outcome": map[string]any{
+			"type": "interrupt",
+			"interrupts": []any{map[string]any{
+				"id": "t9", "toolCallId": "t9", "message": "Run rm?", "reason": "confirmation",
+				"metadata": map[string]any{"options": []any{map[string]any{"optionId": "allow", "name": "Allow", "kind": "allow_once"}}},
+			}},
+		}})
+	}
+	tc := startBridge(t, srv.URL, agentOptions{conversation: "c7", self: true, approveURL: "https://s.example/?thread=c7"})
+	tc.call(t, "initialize", map[string]any{"protocolVersion": 1}, nil)
+	for range 2 {
+		var ns struct{ SessionID string }
+		tc.call(t, "session/new", map[string]any{"cwd": "/tmp"}, &ns)
+		if ns.SessionID != "c7" {
+			t.Fatalf("sessionId = %q", ns.SessionID)
+		}
+	}
+	go func() {
+		var res struct{ StopReason string }
+		_ = tc.rpc.request(context.Background(), "session/prompt", map[string]any{"sessionId": "c7", "prompt": []any{map[string]any{"type": "text", "text": "clean up"}}}, &res)
+	}()
+	waitFor(t, func() bool { return strings.Contains(tc.text("agent_message_chunk"), "https://s.example/?thread=c7") })
+	if got := tc.text("agent_message_chunk"); !strings.Contains(got, "Run rm?") {
+		t.Errorf("approval note = %q", got)
+	}
+	select {
+	case <-f.permissions:
+		t.Error("answered a permission over self-access")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestBearerFileRereadOnReload(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(file, []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := headerSource{bearer: file}
+	got, err := h.load(context.Background(), false)
+	if err != nil || got["Authorization"] != "Bearer one" {
+		t.Fatalf("load = %v, %v", got, err)
+	}
+	if err := os.WriteFile(file, []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := h.load(context.Background(), true); got["Authorization"] != "Bearer two" {
+		t.Errorf("reload = %v", got)
 	}
 }
