@@ -3,6 +3,9 @@
 (require 'ert)
 (require 'scooter)
 
+;; Keep tests away from the user's auth-source files.
+(setq auth-sources nil)
+
 (ert-deftest scooter-test-slug ()
   (should (equal (scooter-slug "Fix the login redirect!" "abc") "fix-the-login-redirect"))
   (should (equal (scooter-slug "  --Ünïcode & spaces--  " "abc") "n-code-spaces"))
@@ -38,6 +41,28 @@
   (let ((a (scooter-auth--random 32)) (b (scooter-auth--random 32)))
     (should (= (length a) 43))
     (should-not (equal a b))))
+
+(ert-deftest scooter-test-cookie-replaces-saved-one ()
+  (let* ((file (make-temp-file "scooter-authinfo"))
+         (auth-sources (list file))
+         (auth-source-save-behavior t)
+         (scooter-servers '((home :url "https://s.example" :auth cookie)))
+         (scooter-auth--cache (make-hash-table :test #'eq)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "machine other.example login me password keep\n"
+                    "machine s.example login _oauth2_proxy password stale\n"))
+          (scooter-auth-set-cookie 'home "fresh")
+          ;; A restart: only auth-source remembers the cookie.
+          (clrhash scooter-auth--cache)
+          (auth-source-forget-all-cached)
+          (should (equal (scooter-auth--cookie 'home) "fresh"))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (= (count-matches "_oauth2_proxy" (point-min) (point-max)) 1))
+            (should (search-forward "password keep" nil t))))
+      (delete-file file))))
 
 (ert-deftest scooter-test-headers-json ()
   (let ((scooter-servers '((home :url "https://s.example" :auth cookie)
