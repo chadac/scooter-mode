@@ -38,6 +38,30 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`
   `--skip-jwt-bearer-tokens` and accept the client as an extra JWT issuer.
   GitHub issues no ID tokens, so GitHub-backed servers use `cookie`.
 
+### Sandbox files over Tramp
+
+`C-c s f` (`scooter-find-file`) opens a file in a conversation's sandbox:
+
+```
+/scooter:<conversation>@<server>:/workspace/...
+```
+
+`<conversation>` is the title slug shown in `scooter-list` (or an id prefix),
+and both parts complete. In a Scooter agent-shell buffer, `C-x C-f`
+and `C-c s f` start in that conversation's sandbox (`C-u C-c s f` asks). Tramp runs `ssh` with `scooter tunnel` as its
+ProxyCommand, which wakes the sandbox, starts its `ssh` web service and pipes
+sshd over a WebSocket. The sandbox needs `webServices.ssh.enable`, and `ssh`
+must be on your `PATH`. Before each connect Emacs writes the conversation id
+and current auth headers to a 0600 file under `scooter-tramp-directory`, next
+to the client key.
+
+## `scooter tunnel`
+
+`scooter tunnel --server URL --conversation ID --headers-command CMD` pipes
+stdin/stdout to a conversation's sshd, for use as an ssh `ProxyCommand`.
+`--spec-file FILE` reads the server, conversation and headers from one JSON
+file instead: `{"url": …, "conversation": …, "headers": {…}}`.
+
 ## `scooter acp`
 
 `scooter acp --server https://scooter.example.org` is an

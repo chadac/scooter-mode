@@ -26,6 +26,7 @@
 (require 'scooter-auth)
 (require 'scooter-list)
 (require 'scooter-agent-shell)
+(declare-function scooter-find-file "scooter-tramp")
 
 (declare-function agent-shell-start "agent-shell")
 
@@ -125,7 +126,8 @@
   [["Conversations"
     ("l" "List" scooter-list)
     ("o" "Open" scooter-open)
-    ("c" "New" scooter-new)]
+    ("c" "New" scooter-new)
+    ("f" "Find file" scooter-find-file)]
    ["From here"
     ("r" "New from region" scooter-new-from-region)
     ("R" "Send region" scooter-send-region)
@@ -143,6 +145,7 @@
   "l" #'scooter-list
   "o" #'scooter-open
   "c" #'scooter-new
+  "f" #'scooter-find-file
   "r" #'scooter-new-from-region
   "R" #'scooter-send-region
   "p" #'scooter-new-from-project)
