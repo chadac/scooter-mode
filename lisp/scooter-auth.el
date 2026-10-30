@@ -8,7 +8,8 @@
 ;; Backends, chosen per server by its :auth setting:
 ;;
 ;; - `cookie': the `_oauth2_proxy' session cookie, pasted or read from
-;;   auth-source.  Works with any oauth2-proxy, GitHub-backed ones included.
+;;   auth-source, and saved there.  Works with any oauth2-proxy, GitHub-backed
+;;   ones included.
 ;; - (oidc :issuer URL :client-id ID): an ID token from Authorization Code +
 ;;   PKCE with a loopback redirect, sent as a bearer token.  oauth2-proxy
 ;;   must run with --skip-jwt-bearer-tokens.  The refresh token is kept in
@@ -27,6 +28,9 @@
   "Seconds to wait for a browser login to finish."
   :type 'integer
   :group 'scooter)
+
+(declare-function secrets-search-items "secrets")
+(declare-function secrets-delete-item "secrets")
 
 (defvar scooter-auth--cache (make-hash-table :test #'eq)
   "Server name to its auth state plist.")
@@ -93,9 +97,10 @@ RETRY is as in `scooter-auth-headers'."
                                (format "Scooter[%s] _oauth2_proxy cookie value: " server)))))
   (setq cookie (string-remove-prefix "_oauth2_proxy=" cookie))
   (scooter-auth--put server :cookie cookie :cookie-refused nil)
+  (scooter-auth--save-secret (scooter-server-host server) "_oauth2_proxy" cookie)
   cookie)
 
-;;;; OIDC
+;;;; auth-source
 
 (defun scooter-auth--secret (host user)
   "Return the auth-source secret for HOST and USER, or nil."
@@ -104,13 +109,50 @@ RETRY is as in `scooter-auth-headers'."
     (if (functionp secret) (funcall secret) secret)))
 
 (defun scooter-auth--save-secret (host user secret)
-  "Save SECRET for HOST and USER through auth-source, if it can."
+  "Save SECRET for HOST and USER through auth-source, replacing the old one."
   (ignore-errors
     (auth-source-forget (list :host host :user user))
-    (let ((found (car (auth-source-search :host host :user user :secret secret
-                                          :create t :max 1))))
-      (when-let* ((save (plist-get found :save-function)))
-        (funcall save)))))
+    (unless (equal (scooter-auth--secret host user) secret)
+      ;; `:create' only adds an entry when none matches.
+      (scooter-auth--delete-secret host user)
+      (let ((found (car (auth-source-search :host host :user user :port "https"
+                                            :secret secret :create t :max 1))))
+        (when-let* ((save (plist-get found :save-function)))
+          (funcall save))))))
+
+(defun scooter-auth--delete-secret (host user)
+  "Delete HOST and USER's entries from every auth-source backend."
+  (dolist (backend (mapcar #'auth-source-backend-parse auth-sources))
+    (let ((source (oref backend source)))
+      (ignore-errors
+        (pcase (oref backend type)
+          ('netrc (scooter-auth--netrc-delete source host user))
+          ('secrets (dolist (item (secrets-search-items source :host host :user user))
+                      (secrets-delete-item source item)))
+          ('plstore (auth-source-search :backend backend :host host :user user
+                                        :delete t :max 100))))))
+  (auth-source-forget-all-cached))
+
+(defun scooter-auth--netrc-delete (file host user)
+  "Delete the one-line netrc entries for HOST and USER from FILE."
+  (when (file-exists-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((machine (rx (or bol blank) "machine" (+ blank) (literal host) (or blank eol)))
+            (login (rx (or bol blank) (or "login" "user") (+ blank) (literal user) (or blank eol)))
+            deleted)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let ((line (buffer-substring (pos-bol) (pos-eol))))
+            (if (and (string-match-p machine line) (string-match-p login line))
+                (progn (delete-region (pos-bol) (min (point-max) (1+ (pos-eol))))
+                       (setq deleted t))
+              (forward-line 1))))
+        (when deleted
+          (write-region (point-min) (point-max) file nil 'silent)
+          (set-file-modes file #o600))))))
+
+;;;; OIDC
 
 (defun scooter-auth--jwt-exp (token)
   "Return the exp claim of JWT TOKEN, or 0."

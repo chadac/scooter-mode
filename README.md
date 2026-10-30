@@ -33,7 +33,8 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`
   region, or the current project; `C-c s R` sends the region to an existing
   one.
 - Auth: `cookie` asks for the `_oauth2_proxy` cookie (or reads it from
-  auth-source, host = the server, user = `_oauth2_proxy`). `oidc` logs in
+  auth-source, host = the server, user = `_oauth2_proxy`) and saves it to
+  your first `auth-sources` entry, replacing the old one. `oidc` logs in
   through the browser with PKCE; oauth2-proxy must run with
   `--skip-jwt-bearer-tokens` and accept the client as an extra JWT issuer.
   GitHub issues no ID tokens, so GitHub-backed servers use `cookie`.
