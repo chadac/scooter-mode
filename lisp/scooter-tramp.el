@@ -151,6 +151,7 @@ fills in %u (conversation) and %h (server)."
 
 ;;;###autoload (with-eval-after-load 'tramp (scooter-tramp-enable))
 
+;;;###autoload
 (defun scooter-tramp-file-name (server id &optional path)
   "Return the Tramp name of PATH (default /workspace/) in SERVER's conversation ID.
 It uses the slug when that names ID, else the id itself."

@@ -303,5 +303,31 @@
       (should (member "/tmp/a dir/id_ed25519" words))
       (should (equal (last words) '("%h"))))))
 
+(ert-deftest scooter-test-shell-find-file-starts-in-the-sandbox ()
+  (let ((scooter-servers '((home :url "https://s.example") (me :url "https://m.example" :self t)))
+        (calls 0))
+    (cl-letf (((symbol-function 'scooter-tramp-file-name)
+               (lambda (server id) (cl-incf calls) (format "/scooter:%s@%s:/workspace/" id server))))
+      (with-temp-buffer
+        (setq-local agent-shell--state '((:agent-config (:identifier . scooter-home))
+                                         (:session (:id . "abc"))))
+        (scooter-agent-shell--enable-files)
+        (should scooter-agent-shell-files-mode)
+        (should (eq (key-binding [remap find-file]) #'scooter-agent-shell-find-file))
+        (should (equal (scooter-agent-shell-directory) "/scooter:abc@home:/workspace/"))
+        (scooter-agent-shell-directory)
+        (should (= calls 1)))
+      (with-temp-buffer
+        (setq-local agent-shell--state '((:agent-config (:identifier . scooter-home))))
+        (should-not (scooter-agent-shell-directory)))
+      (with-temp-buffer
+        (setq-local agent-shell--state '((:agent-config (:identifier . scooter-me))
+                                         (:session (:id . "abc"))))
+        (should-not (scooter-agent-shell-directory)))
+      (with-temp-buffer
+        (setq-local agent-shell--state '((:agent-config (:identifier . claude-code))))
+        (scooter-agent-shell--enable-files)
+        (should-not scooter-agent-shell-files-mode)))))
+
 (provide 'scooter-test)
 ;;; scooter-test.el ends here

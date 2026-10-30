@@ -7,11 +7,13 @@
 
 ;; Each server becomes an agent-shell agent that runs `scooter acp'.  The
 ;; bridge asks this Emacs for auth headers through emacsclient, so login and
-;; refresh stay in `scooter-auth'.
+;; refresh stay in `scooter-auth'.  In a Scooter shell, `find-file' starts in
+;; the conversation's sandbox over Tramp.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'map)
 (require 'server)
 (require 'scooter-server)
 (require 'scooter-auth)
@@ -20,7 +22,9 @@
 (declare-function agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
+(declare-function scooter-tramp-file-name "scooter-tramp")
 (defvar agent-shell-agent-configs)
+(defvar agent-shell--state)
 
 (defcustom scooter-acp-command '("scooter" "acp")
   "Command and leading arguments that run the ACP bridge.
@@ -81,6 +85,50 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
         :command-params (scooter-acp-arguments server :project project)
         :context-buffer buffer))
      :install-instructions "Install the bridge: nix profile install github:chadac/scooter-mode")))
+
+;;;; Sandbox files
+
+(defun scooter-agent-shell--server ()
+  "Return the Scooter server of this agent-shell buffer, or nil."
+  (when-let* ((state (bound-and-true-p agent-shell--state))
+              (id (map-nested-elt state '(:agent-config :identifier)))
+              ((string-prefix-p "scooter-" (symbol-name id)))
+              (server (intern (string-remove-prefix "scooter-" (symbol-name id))))
+              ((memq server (scooter-server-names))))
+    server))
+
+(defvar-local scooter-agent-shell--directory nil
+  "This shell's sandbox /workspace/ as a Tramp name, once known.")
+
+(defun scooter-agent-shell-directory ()
+  "Return this shell's sandbox /workspace/ over Tramp, or nil.
+It is nil outside a Scooter shell, for a :self server, whose sandbox is
+local, and before the conversation exists."
+  (or scooter-agent-shell--directory
+      (when-let* ((server (scooter-agent-shell--server))
+                  ((not (scooter-server-get server :self)))
+                  (id (map-nested-elt agent-shell--state '(:session :id))))
+        (setq scooter-agent-shell--directory (scooter-tramp-file-name server id)))))
+
+(defun scooter-agent-shell-find-file ()
+  "Run `find-file' from this conversation's sandbox, when there is one."
+  (interactive)
+  (let ((default-directory (or (scooter-agent-shell-directory) default-directory)))
+    (call-interactively #'find-file)))
+
+(defvar-keymap scooter-agent-shell-files-mode-map
+  "<remap> <find-file>" #'scooter-agent-shell-find-file)
+
+(define-minor-mode scooter-agent-shell-files-mode
+  "Make `find-file' in a Scooter shell start in its sandbox."
+  :keymap scooter-agent-shell-files-mode-map)
+
+(defun scooter-agent-shell--enable-files ()
+  "Turn on `scooter-agent-shell-files-mode' in Scooter shells."
+  (when (scooter-agent-shell--server)
+    (scooter-agent-shell-files-mode 1)))
+
+(add-hook 'agent-shell-mode-hook #'scooter-agent-shell--enable-files)
 
 ;;;###autoload
 (defun scooter-agent-shell-register ()

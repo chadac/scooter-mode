@@ -47,7 +47,8 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`
 ```
 
 `<conversation>` is the title slug shown in `scooter-list` (or an id prefix),
-and both parts complete. Tramp runs `ssh` with `scooter tunnel` as its
+and both parts complete. In a Scooter agent-shell buffer, `C-x C-f`
+starts in that conversation's sandbox. Tramp runs `ssh` with `scooter tunnel` as its
 ProxyCommand, which wakes the sandbox, starts its `ssh` web service and pipes
 sshd over a WebSocket. The sandbox needs `webServices.ssh.enable`, and `ssh`
 must be on your `PATH`. Before each connect Emacs writes the conversation id
