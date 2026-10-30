@@ -162,10 +162,14 @@ It uses the slug when that names ID, else the id itself."
 
 ;;;###autoload
 (defun scooter-find-file (server id)
-  "Open /workspace in SERVER's conversation ID over Tramp."
-  (interactive (let ((server (scooter-current-server current-prefix-arg)))
-                 (list server (scooter-read-conversation server))))
-  (find-file (scooter-tramp-file-name server id)))
+  "Open /workspace in SERVER's conversation ID over Tramp.
+In a Scooter shell it opens that shell's conversation; a prefix argument asks."
+  (interactive (or (and (not current-prefix-arg) (scooter-agent-shell-conversation))
+                   (let ((server (scooter-current-server current-prefix-arg)))
+                     (list server (scooter-read-conversation server)))))
+  (find-file (if (equal (list server id) (scooter-agent-shell-conversation))
+                 (scooter-agent-shell-directory)
+               (scooter-tramp-file-name server id))))
 
 (provide 'scooter-tramp)
 ;;; scooter-tramp.el ends here

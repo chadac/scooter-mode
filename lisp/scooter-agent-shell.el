@@ -100,15 +100,20 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
 (defvar-local scooter-agent-shell--directory nil
   "This shell's sandbox /workspace/ as a Tramp name, once known.")
 
-(defun scooter-agent-shell-directory ()
-  "Return this shell's sandbox /workspace/ over Tramp, or nil.
+(defun scooter-agent-shell-conversation ()
+  "Return (SERVER ID) for this shell's remote conversation, or nil.
 It is nil outside a Scooter shell, for a :self server, whose sandbox is
 local, and before the conversation exists."
+  (when-let* ((server (scooter-agent-shell--server))
+              ((not (scooter-server-get server :self)))
+              (id (map-nested-elt agent-shell--state '(:session :id))))
+    (list server id)))
+
+(defun scooter-agent-shell-directory ()
+  "Return this shell's sandbox /workspace/ over Tramp, or nil."
   (or scooter-agent-shell--directory
-      (when-let* ((server (scooter-agent-shell--server))
-                  ((not (scooter-server-get server :self)))
-                  (id (map-nested-elt agent-shell--state '(:session :id))))
-        (setq scooter-agent-shell--directory (scooter-tramp-file-name server id)))))
+      (when-let* ((conv (scooter-agent-shell-conversation)))
+        (setq scooter-agent-shell--directory (apply #'scooter-tramp-file-name conv)))))
 
 (defun scooter-agent-shell-find-file ()
   "Run `find-file' from this conversation's sandbox, when there is one."

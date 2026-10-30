@@ -316,7 +316,9 @@
         (should (eq (key-binding [remap find-file]) #'scooter-agent-shell-find-file))
         (should (equal (scooter-agent-shell-directory) "/scooter:abc@home:/workspace/"))
         (scooter-agent-shell-directory)
-        (should (= calls 1)))
+        (should (= calls 1))
+        (cl-letf (((symbol-function 'find-file) #'identity))
+          (should (equal (call-interactively #'scooter-find-file) "/scooter:abc@home:/workspace/"))))
       (with-temp-buffer
         (setq-local agent-shell--state '((:agent-config (:identifier . scooter-home))))
         (should-not (scooter-agent-shell-directory)))
