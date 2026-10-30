@@ -20,20 +20,64 @@ var errAuthWall = errors.New("login required")
 
 // headerSource reads auth headers (JSON) from a command or file.
 type headerSource struct {
-	command string
-	file    string
-	bearer  string // a token file, reread on reload since it may rotate
+	command  string
+	file     string
+	bearer   string // a token file, reread on reload since it may rotate
+	spec     string // a command printing a tunnelSpec; its headers
+	specFile string // a file holding a tunnelSpec, as Tramp writes before each connect
+}
+
+// runJSONCommand runs a shell command and returns its JSON output.
+func runJSONCommand(ctx context.Context, command string, retry bool) ([]byte, error) {
+	// {retry} lets the command drop a refused token.
+	cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(command, "{retry}", lispBool(retry)))
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	out = bytes.TrimSpace(out)
+	// emacsclient prints a Lisp string: a quoted, escaped JSON document.
+	if len(out) > 0 && out[0] == '"' {
+		var s string
+		if json.Unmarshal(out, &s) == nil {
+			out = []byte(s)
+		}
+	}
+	return out, nil
+}
+
+// loadSpec runs the spec command or reads the spec file.
+func (h headerSource) loadSpec(ctx context.Context, retry bool) (tunnelSpec, error) {
+	var s tunnelSpec
+	var out []byte
+	var err error
+	if h.specFile != "" {
+		out, err = os.ReadFile(h.specFile)
+	} else {
+		out, err = runJSONCommand(ctx, h.spec, retry)
+	}
+	if err != nil {
+		return s, fmt.Errorf("tunnel spec: %w", err)
+	}
+	if err := json.Unmarshal(out, &s); err != nil {
+		return s, fmt.Errorf("tunnel spec: want a JSON object: %w", err)
+	}
+	return s, nil
 }
 
 func (h headerSource) load(ctx context.Context, retry bool) (map[string]string, error) {
 	var out []byte
 	var err error
 	switch {
+	case h.spec != "" || h.specFile != "":
+		s, err := h.loadSpec(ctx, retry)
+		if s.Headers == nil {
+			s.Headers = map[string]string{}
+		}
+		return s.Headers, err
 	case h.command != "":
-		// {retry} lets the command drop a token the proxy just refused.
-		cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(h.command, "{retry}", lispBool(retry)))
-		cmd.Stderr = os.Stderr
-		out, err = cmd.Output()
+		out, err = runJSONCommand(ctx, h.command, retry)
 	case h.bearer != "":
 		tok, err := os.ReadFile(h.bearer)
 		if err != nil {
@@ -49,13 +93,6 @@ func (h headerSource) load(ctx context.Context, retry bool) (map[string]string, 
 		return nil, fmt.Errorf("auth headers: %w", err)
 	}
 	out = bytes.TrimSpace(out)
-	// emacsclient prints a Lisp string: a quoted, escaped JSON document.
-	if len(out) > 0 && out[0] == '"' {
-		var s string
-		if json.Unmarshal(out, &s) == nil {
-			out = []byte(s)
-		}
-	}
 	m := map[string]string{}
 	if len(out) == 0 {
 		return m, nil
@@ -125,6 +162,11 @@ func isAuthWall(resp *http.Response) bool {
 
 // do sends a request, reloading headers once on an auth wall.
 func (c *client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	return c.doURL(ctx, method, c.base+path, body)
+}
+
+// doURL is do for an absolute URL, such as a sandbox origin's.
+func (c *client) doURL(ctx context.Context, method, rawURL string, body any) (*http.Response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -137,7 +179,7 @@ func (c *client) do(ctx context.Context, method, path string, body any) (*http.R
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(payload))
 		if err != nil {
 			return nil, err
 		}

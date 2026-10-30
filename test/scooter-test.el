@@ -258,5 +258,50 @@
                 '(princ (list evil-state (key-binding "?") (key-binding "g"))))))
       (should (equal res '(0 . "(emacs scooter-list-dispatch scooter-list-refresh)"))))))
 
+;;; Tramp
+
+(require 'scooter-tramp)
+
+(ert-deftest scooter-test-tramp-file-name-prefers-a-unique-slug ()
+  (cl-letf (((symbol-function 'scooter--title-of) (lambda (_s id) (if (equal id "old") "dup" "fix")))
+            ((symbol-function 'scooter-tramp-resolve) (lambda (_s slug) (if (equal slug "dup") "new" "c1"))))
+    (should (equal (scooter-tramp-file-name 'home "c1") "/scooter:fix@home:/workspace/"))
+    (should (equal (scooter-tramp-file-name 'home "old" "/tmp/") "/scooter:old@home:/tmp/"))))
+
+(ert-deftest scooter-test-tramp-resolves-slugs-and-id-prefixes ()
+  (scooter-test-with-fake-server url
+    (let ((scooter-servers `((home :url ,url))))
+      (should (equal (scooter-tramp-resolve 'home "fix-login") "c1"))
+      (should (equal (scooter-tramp-resolve 'home "0123") "0123456789"))
+      (should-error (scooter-tramp-resolve 'home "nope") :type 'user-error)
+      (should (equal (scooter-tramp-completions "") '(("fix-login" "home") ("01234567" "home")))))))
+
+(ert-deftest scooter-test-tramp-writes-a-private-spec ()
+  (scooter-test-with-fake-server url
+    (let* ((scooter-servers `((home :url ,url)))
+           (scooter-tramp-directory (file-name-as-directory (make-temp-file "scooter-tramp" t)))
+           (file (scooter-tramp--file "fix-login.home.json")))
+      (unwind-protect
+          (progn
+            (scooter-tramp--write-spec "home" "fix-login")
+            (should (= (file-modes file) #o600))
+            (should (equal (json-read-file file)
+                           `((url . ,url) (conversation . "c1") (headers)))))
+        (delete-directory scooter-tramp-directory t)))))
+
+(ert-deftest scooter-test-tramp-login-args-survive-the-shell ()
+  ;; Tramp joins the args with spaces and hands them to a shell.
+  (cl-letf (((symbol-function 'scooter-install-program) #'identity))
+    (let* ((scooter-tramp-directory "/tmp/a dir/")
+           (scooter-acp-command '("/opt/my scooter" "acp"))
+           (words (split-string-shell-command
+                   (string-join (flatten-tree (scooter-tramp-login-args)) " ")))
+           (proxy (seq-find (lambda (w) (string-prefix-p "ProxyCommand=" w)) words)))
+      ;; ssh runs the ProxyCommand through a second shell.
+      (should (equal (split-string-shell-command (string-remove-prefix "ProxyCommand=" proxy))
+                     '("/opt/my scooter" "tunnel" "--spec-file" "/tmp/a dir/%u.%h.json")))
+      (should (member "/tmp/a dir/id_ed25519" words))
+      (should (equal (last words) '("%h"))))))
+
 (provide 'scooter-test)
 ;;; scooter-test.el ends here
